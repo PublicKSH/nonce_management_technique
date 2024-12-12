@@ -1,6 +1,7 @@
 const { when } = require("joi");
 const { Transaction, sequelize } = require("../models/index");
 const { filterUndefinedOrNull } = require("../utils/objectFilter");
+const constants = require("../config/constants");
 const getTransactions = async (transaction) => {
   return await Transaction.findAll({
     attributes: { exclude: ["updated_at"] },
@@ -40,6 +41,17 @@ const getLastTransaction = async (serverKeyId, transaction) => {
     attributes: { exclude: ["updated_at"] },
     where: { server_key_id: serverKeyId },
     order: [["nonce", "DESC"]],
+    transaction,
+  });
+};
+
+const getLowestNonceTransaction = async (transaction) => {
+  return await Transaction.findOne({
+    attributes: { exclude: ["updated_at"] },
+    where: {
+      status: constants.TX_STATUS.SEND,
+    },
+    order: [["nonce", "ASC"]], // nonce를 오름차순으로 정렬
     transaction,
   });
 };
@@ -89,6 +101,7 @@ module.exports = {
   getTransactions,
   getTransactionById,
   getTransactionByNonce,
+  getLowestNonceTransaction,
   createTransaction,
   getLastTransaction,
   getTransaction,

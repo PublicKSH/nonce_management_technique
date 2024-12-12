@@ -73,13 +73,18 @@ class TxWorkerService {
       const sendDate = Date.now();
 
       // 트랜잭션 전송
-      const sendResult = await this.caver.rpc.klay.sendRawTransaction(
-        rawTransaction
-      );
+      let sendResult;
+      if (txData.nonce % 500 != 0) {
+        sendResult = await this.caver.rpc.klay.sendRawTransaction(
+          rawTransaction
+        );
+      } else {
+        console.log(`tx not include block! ${txData.nonce}`);
+      }
 
       await transactionRepository.updateTransaction({
         transactionId: transaction.transaction_id,
-        txHash: sendResult.transactionHash,
+        txHash: sendResult != null ? sendResult.transactionHash : null,
         sendDate: sendDate,
         status: constants.TX_STATUS.SEND,
       });
@@ -87,69 +92,96 @@ class TxWorkerService {
       // 트랜잭션 상태 확인 로직
       const checkTransaction = async () => {
         const elapsedTime = Date.now() - sendDate;
-
         // n초 이상 경과 시 재전송
+        // 보내고 난뒤 가장 낮은 nonce만 재전송
         if (elapsedTime >= constants.RECOVER_TIME) {
-          console.log(
-            `Transaction taking too long (${elapsedTime}ms), resending...`
-          );
-          const updatedGasPrice = this.caver.utils.toHex(
-            Math.floor(parseInt(cache.gasPrice, 16) * 1.2) // Gas Price 20% 증가
-          );
+          const lowestNonceTransaction =
+            await transactionRepository.getLowestNonceTransaction();
 
-          const newMintTx =
-            await this.caver.transaction.smartContractExecution.create({
-              from: this.config.klaytn.adminAddress,
-              to: this.config.klaytn.smartContractAddress,
-              input: txData.mintData,
-              gas: cache.gas,
-              gasPrice: updatedGasPrice,
-              nonce: txData.nonce,
+          if (
+            lowestNonceTransaction &&
+            lowestNonceTransaction.nonce == txData.nonce
+          ) {
+            console.log("lowestNonceTransaction nonce : ");
+            console.log(lowestNonceTransaction.nonce);
+            console.log(
+              `Transaction taking too long (${elapsedTime}ms), resending...`
+            );
+            const updatedGasPrice = this.caver.utils.toHex(
+              Math.floor(parseInt(cache.gasPrice, 16) * 1.2) // Gas Price 20% 증가
+            );
+
+            const newMintTx =
+              await this.caver.transaction.smartContractExecution.create({
+                from: this.config.klaytn.adminAddress,
+                to: this.config.klaytn.smartContractAddress,
+                input: txData.mintData,
+                gas: cache.gas,
+                gasPrice: updatedGasPrice,
+                nonce: txData.nonce,
+              });
+
+            const newSignedTx = await this.caver.wallet.sign(
+              this.config.klaytn.adminAddress,
+              newMintTx
+            );
+            const newRawTransaction = newSignedTx.getRLPEncoding();
+
+            const newSendResult = await this.caver.rpc.klay.sendRawTransaction(
+              newRawTransaction
+            );
+            console.log("Resent transaction:", newSendResult);
+
+            console.log("update!!");
+            await transactionRepository.updateTransaction({
+              transactionId: transaction.transaction_id,
+              txHash: newSendResult.transactionHash,
+              sendDate: Date.now(),
+              status: constants.TX_STATUS.SEND,
             });
 
-          const newSignedTx = await this.caver.wallet.sign(
-            this.config.klaytn.adminAddress,
-            newMintTx
-          );
-          const newRawTransaction = newSignedTx.getRLPEncoding();
+            // 아래 코드는 테스트를 위한 코드
+            const receipt = await this.caver.rpc.klay.getTransactionReceipt(
+              newSendResult.transactionHash
+            );
 
-          const newSendResult = await this.caver.rpc.klay.sendRawTransaction(
-            newRawTransaction
-          );
-          console.log("Resent transaction:", newSendResult);
-
-          await transactionRepository.updateTransaction({
-            transactionId: transaction.transaction_id,
-            txHash: newSendResult.transactionHash,
-            sendDate: Date.now(),
-            status: constants.TX_STATUS.SEND,
-          });
-
-          return;
+            if (receipt) {
+              if (receipt.status) {
+                await transactionRepository.updateTransaction({
+                  transactionId: transaction.transaction_id,
+                  status: constants.TX_STATUS.SUCCESS,
+                  successDate: Date.now(),
+                });
+              }
+            }
+          }
         }
 
         try {
-          const receipt = await this.caver.rpc.klay.getTransactionReceipt(
-            sendResult.transactionHash
-          );
+          // todo : 코드 수정 필요
+          if (sendResult) {
+            // 테스트를 위한 코드 미사용 논스가 발생하는 상황을 가정함에 따라 생기는 vaildation
+            const receipt = await this.caver.rpc.klay.getTransactionReceipt(
+              sendResult.transactionHash
+            );
 
-          if (receipt) {
-            if (receipt.status) {
-              console.log(
-                `Transaction confirmed in block ${receipt.blockNumber}`
-              );
-              await transactionRepository.updateTransaction({
-                transactionId: transaction.transaction_id,
-                status: constants.TX_STATUS.SUCCESS,
-                successDate: Date.now(),
-              });
-              return receipt;
+            if (receipt) {
+              if (receipt.status) {
+                await transactionRepository.updateTransaction({
+                  transactionId: transaction.transaction_id,
+                  status: constants.TX_STATUS.SUCCESS,
+                  successDate: Date.now(),
+                });
+                return receipt;
+              } else {
+                console.error("Transaction failed.");
+                await transactionRepository.updateTransaction({
+                  transactionId: transaction.transaction_id,
+                  status: constants.TX_STATUS.FAILED,
+                });
+              }
             } else {
-              console.error("Transaction failed.");
-              await transactionRepository.updateTransaction({
-                transactionId: transaction.transaction_id,
-                status: constants.TX_STATUS.FAILED,
-              });
+              setTimeout(checkTransaction, 1); // 1초 후 다시 확인
             }
           } else {
             setTimeout(checkTransaction, 1); // 1초 후 다시 확인

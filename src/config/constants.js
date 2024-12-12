@@ -16,5 +16,5 @@ module.exports = {
     SUCCESS: 3,
     FAILED: 3,
   },
-  RECOVER_TIME: 5000,
+  RECOVER_TIME: 3000,
 };
