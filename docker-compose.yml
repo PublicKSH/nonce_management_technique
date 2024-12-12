@@ -1,0 +1,41 @@
+# version: "3.8"
+
+services:
+  redis:
+    image: redis:latest
+    container_name: redis
+    ports:
+      - "6379:6379"
+    environment:
+      - TZ=UTC
+
+  # geth:
+  #   image: 127.0.0.1:5000/geth-node:nonce-management
+  #   build:
+  #     context: ./geth
+  #     dockerfile: Dockerfile
+  #   ports:
+  #     - "8545:8545"
+  #     - "8546:8546"
+  #   environment:
+  #     - TZ=UTC
+  #   deploy:
+  #     replicas: 1
+  #     placement:
+  #       constraints:
+  #         - "node.role==manager"
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    ports:
+      - "5682:5682" # RabbitMQ messaging port
+      - "15672:15672" # RabbitMQ manage console port
+    environment:
+      RABBITMQ_DEFAULT_USER: myuser
+      RABBITMQ_DEFAULT_PASS: mypassword
+    networks:
+      - shared_network
+
+networks:
+  shared_network:
+    driver: bridge
